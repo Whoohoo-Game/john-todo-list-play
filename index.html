@@ -21,6 +21,8 @@
 <script src="sound.js"></script>
 <script src="story.js"></script>
 <script src="shots.js"></script>
+<script src="town.js"></script>
+<script src="house.js"></script>
 <script>
 'use strict';
 // The one-shot's starter: only what the checks read. Keep the fixed step, the clock hook,
@@ -146,7 +148,7 @@ function reset() {
   BG_SCALE = CHEAP ? 1 : 1.5;
   inputs.length = 0;
   if (audio) setAmbience('none');
-  enterRoom(state, params.get('room') || 'factory'); // ?room= starts in another place, for checking
+  enterRoom(state, params.get('room') || 'grave'); // ?room= starts in another place, for checking
 }
 const scenes = {
   figures: {
@@ -163,10 +165,13 @@ const scenes = {
       drawYoungJohn(ctx, 960, 470, 0.9, {}); L('John at 25', 960);
       drawOfficer(ctx, 1110, 640, t); L('The officer', 1110);
       drawCat(ctx, 1220, 640, t, 'sit'); L('The cat', 1220);
-      drawJohnInBed(ctx, 120, 200, t, { blanket: [[0, '#8a5a4a'], [1, '#5a3a30']] }); text('John, in bed', 300, 290, 18, PAL.cream);
-      drawWindMouse(ctx, 640, 230, 1.4, { tail: true }); text('The wind-up mouse', 640, 290, 18, PAL.cream);
-      drawSafe(ctx, 840, 80, 0.8); text('The safe', 930, 290, 18, PAL.cream);
-      drawToyBox(ctx, 1130, 220, 1.2); text('The toy box', 1130, 290, 18, PAL.cream);
+      drawJohnInBed(ctx, 60, 200, t, { blanket: [[0, '#8a5a4a'], [1, '#5a3a30']] }); text('John, in bed', 240, 290, 18, PAL.cream);
+      drawPaul(ctx, 470, 280, t, { s: 0.8 }); text('Paul', 470, 300, 18, PAL.cream);
+      drawForeman(ctx, 580, 280, t, { s: 0.8 }); text('The manager', 600, 300, 18, PAL.cream);
+      drawBurntSoldier(ctx, 720, 270, 1.6); text('The burnt soldier', 720, 300, 18, PAL.cream);
+      drawStrongbox(ctx, 880, 220, 0.8); text("Mary's strongbox", 880, 300, 18, PAL.cream);
+      drawBouquet(ctx, 1040, 230, 0.9); text('Her tulips', 1040, 300, 18, PAL.cream);
+      drawCarton(ctx, 1180, 270, 0.8); text('The box', 1170, 300, 18, PAL.cream);
       drawVignette(ctx, W, H, 0.5);
     },
   },
@@ -218,10 +223,12 @@ const scenes = {
     },
     draw() {
       clear('#0c0806'); drawGrain(ctx, W, H, tune.grain);
-      text(state.gained || 'The End', W / 2, H / 2 - 90, 52, PAL.paleOchre);
-      text('John has thirty days, and her list.', W / 2, H / 2 - 20, 28, '#cdbb94');
-      text('To be continued.', W / 2, H / 2 + 30, 24, '#a89878');
-      text('Click, tap or press Enter to play again', W / 2, H / 2 + 120, 24, PAL.cream);
+      text(state.gained || 'The End', W / 2, 150, 44, PAL.paleOchre);
+      drawPlate(ctx, W / 2, H / 2, 980, 190);
+      text('Thank you for playing our demo.', W / 2, H / 2 - 52, 30, PAL.cream);
+      text('If John\'s story stays with you, please add the game to your Steam wishlist,', W / 2, H / 2 + 2, 22, '#e6d6ad');
+      text('and follow us on YouTube, X and Discord for the latest news.', W / 2, H / 2 + 38, 22, '#e6d6ad');
+      text('Click, tap or press Enter to play again', W / 2, 620, 22, '#a89878');
       drawVignette(ctx, W, H, tune.vignette);
     },
   },

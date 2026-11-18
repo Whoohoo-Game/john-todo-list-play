@@ -1,0 +1,276 @@
+<!doctype html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<!-- Question: Does a short, nearly wordless opening chapter make the player feel for John, and want to start the list with him? -->
+<!-- Date: 2026-11-13 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>John Todo List</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { font-variant-numeric: tabular-nums; }
+  canvas { display: block; margin: 0 auto; cursor: none; touch-action: none; user-select: none; -webkit-user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="config.js"></script>
+<script src="art.js"></script>
+<script src="paint.js"></script>
+<script src="sound.js"></script>
+<script src="story.js"></script>
+<script src="shots.js"></script>
+<script src="town.js"></script>
+<script src="house.js"></script>
+<script>
+'use strict';
+// The one-shot's starter: only what the checks read. Keep the fixed step, the clock hook,
+// window.game and the play and figures scenes. Everything else is the game's own: replace
+// what is marked "the game", and draw every figure in the brief's look, in 2D or with three.js.
+
+// ---- Built to be checked ----------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const tune = new Proxy({}, { get: (_, k) => CONFIG[k].value }); // live: tune.speed is CONFIG.speed.value
+const STEP = 1 / 60;            // simulation step in seconds; motion is per second, never per frame
+const W = 1280, H = 720;        // logical size; a pixel look lowers it and sets PIXEL
+const PIXEL = false;            // pixel looks: whole-number scale, no smoothing
+const FONT = SERIF;             // old serif lettering, from art.js
+const TITLE = 'John Todo List';
+const CONTROLS = ['Click or tap to look and take  ·  double-click or double-tap to focus', 'Drag to push, pull, turn and trace  ·  drag an item onto something to use it', 'Step back: right-click, scroll down, Esc, or pinch', 'Turn: arrows, A / D / W, or swipe  ·  M: map  ·  H: hint  ·  Space: what you can touch', 'P: pause  ·  N: sound on or off']; // shown on the title screen
+const clock = window.GAME_CLOCK || { now: () => performance.now() / 1000 }; // a check may inject one
+const CHEAP = params.get('render') === 'cheap'; // a headless shot or check: 3D draws cheap; players never see it
+let seed;
+function rng() { // mulberry32; every gameplay random call reads this, never Math.random
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const events = []; // window.game.events: anything the game wants a run to see
+
+// ---- Screen ---------------------------------------------------------------------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fit() { // fills the window at any size and pixel ratio
+  const k = Math.min(innerWidth / W, innerHeight / H);
+  const s = PIXEL ? Math.max(1, Math.floor(k)) : k;
+  const r = PIXEL ? 1 : s * (devicePixelRatio || 1);
+  canvas.width = Math.round(W * r); canvas.height = Math.round(H * r);
+  canvas.style.width = Math.round(W * s) + 'px'; canvas.style.height = Math.round(H * s) + 'px';
+  canvas.style.marginTop = Math.max(0, Math.floor((innerHeight - H * s) / 2)) + 'px';
+  canvas.style.imageRendering = PIXEL ? 'pixelated' : 'auto';
+  ctx.setTransform(r, 0, 0, r, 0, 0); ctx.imageSmoothingEnabled = !PIXEL;
+}
+addEventListener('resize', fit); fit();
+function clear(c) { ctx.fillStyle = c; ctx.fillRect(0, 0, W, H); }
+function text(s, x, y, size, c, align = 'center') {
+  ctx.fillStyle = c; ctx.font = `${size}px ${FONT}`; ctx.textAlign = align;
+  ctx.textBaseline = 'middle'; ctx.fillText(s, x, y);
+}
+
+// ---- Input: keys by position (event.code), OS key repeat ignored ------------------------
+const down = new Set(), hit = new Set();
+const pressed = code => hit.has(code); // true for one step after the key goes down
+addEventListener('keydown', e => {
+  startAudio();
+  if (!e.repeat) { down.add(e.code); hit.add(e.code); }
+  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+});
+addEventListener('keyup', e => down.delete(e.code));
+// Pointer gestures, the same for a mouse and a finger: tap, double tap, drag, pinch, back.
+const mouse = { x: -1, y: -1, touch: false }, inputs = [];
+function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H]; }
+const ptrs = new Map(); let pinch = null, lastTap = null, wheelT = -9;
+addEventListener('pointerdown', e => {
+  startAudio(); const [x, y] = toLogical(e); mouse.x = x; mouse.y = y; mouse.touch = e.pointerType === 'touch';
+  if (e.button === 2) { inputs.push({ type: 'back' }); return; }
+  ptrs.set(e.pointerId, { x, y, x0: x, y0: y, t0: clock.now(), moved: false });
+  if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), done: false }; inputs.push({ type: 'cancel', x, y }); return; }
+  if (ptrs.size === 1) inputs.push({ type: 'down', x, y });
+});
+addEventListener('pointermove', e => {
+  const [x, y] = toLogical(e); mouse.x = x; mouse.y = y; mouse.touch = e.pointerType === 'touch';
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  p.x = x; p.y = y; if (Math.hypot(x - p.x0, y - p.y0) > tune.tapMove) p.moved = true;
+  if (pinch) { const [a, b] = [...ptrs.values()]; if (!pinch.done && Math.hypot(a.x - b.x, a.y - b.y) < pinch.d0 * tune.pinchRatio) { pinch.done = true; inputs.push({ type: 'back' }); } return; }
+  if (ptrs.size === 1) inputs.push({ type: 'move', x, y });
+});
+function pointerEnd(e) {
+  const p = ptrs.get(e.pointerId); if (!p) return;
+  ptrs.delete(e.pointerId);
+  if (pinch) { if (!ptrs.size) pinch = null; return; }
+  const [x, y] = toLogical(e);
+  if (e.type === 'pointercancel') { inputs.push({ type: 'cancel', x, y }); return; }
+  inputs.push({ type: 'up', x, y });
+  if (!p.moved && clock.now() - p.t0 < 0.6) {
+    inputs.push({ type: 'tap', x, y });
+    const now = clock.now();
+    if (lastTap && now - lastTap.t < tune.doubleTapTime && Math.hypot(x - lastTap.x, y - lastTap.y) < 40) { inputs.push({ type: 'dbl', x, y }); lastTap = null; }
+    else lastTap = { x, y, t: now };
+  }
+}
+addEventListener('pointerup', pointerEnd); addEventListener('pointercancel', pointerEnd);
+addEventListener('wheel', e => { if (e.deltaY > 20 && clock.now() - wheelT > 0.5) { wheelT = clock.now(); inputs.push({ type: 'back' }); } }, { passive: true });
+addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('blur', () => down.clear());
+
+// ---- Audio: started on first input, sound off on N ----------------------------------------
+let audio = null, muted = false;
+function startAudio() {
+  if (!audio) {
+    const ac = window.GAME_AUDIO || new (window.AudioContext || window.webkitAudioContext)(); // a check may inject one
+    const out = ac.createGain(); out.gain.value = muted ? 0 : tune.volume;
+    out.connect(ac.destination); audio = { ac, out };
+    if (state) setAmbience(scene === 'play' ? (ROOMS[state.room].amb || 'none') : 'none');
+  }
+  if (audio.ac.state === 'suspended') audio.ac.resume();
+}
+function setMuted(m) { muted = m; if (audio) audio.out.gain.value = m ? 0 : tune.volume; }
+addEventListener('tune', () => setMuted(muted)); // the tweak panel (an add-on), when added, moved a value: the volume follows
+function tone(freq, dur, type = 'square', vol = 0.3) {
+  if (!audio || muted) return;
+  const t = audio.ac.currentTime, o = audio.ac.createOscillator(), g = audio.ac.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  o.connect(g).connect(audio.out); o.start(t); o.stop(t + dur);
+}
+
+// ---- Scenes: keep only the day-one screens the brief calls for ----------------------------
+// title: always. pause: real-time games. over: hard failure. results: a game with an end.
+// figures: every enemy kind and unit side by side, for the outline check (?scene=figures).
+// The checks look for play by name.
+let scene, state;
+function reset() {
+  seed = Number(params.get('seed')) || CONFIG.seed;
+  // state.gained: what this run gained or learned, the high the ending shows.
+  state = Object.assign(newStory(), { score: 0, gained: '' });
+  BG_SCALE = CHEAP ? 1 : 1.5;
+  inputs.length = 0;
+  if (audio) setAmbience('none');
+  enterRoom(state, params.get('room') || 'grave'); // ?room= starts in another place, for checking
+}
+const scenes = {
+  figures: {
+    update(dt) { state.t += dt; },
+    draw() {
+      clear('#1a120c'); drawGrain(ctx, W, H, 0.2);
+      const t = state.t, L = (s, x) => text(s, x, 690, 18, PAL.cream);
+      ctx.save(); ctx.translate(90, 640); ctx.scale(0.55, 0.55); drawJohnSeated(ctx, 0, 0, t); ctx.restore(); L('John, at his bench', 120);
+      drawJohnStanding(ctx, 280, 640, t); L('John, in his coat', 280);
+      drawWorker(ctx, 420, 640, t, { s: 0.9 }); L('A worker', 420);
+      drawNurse(ctx, 540, 640, t); L('The nurse', 540);
+      ctx.save(); ctx.translate(680, 640); ctx.scale(0.75, 0.75); drawDoctor(ctx, 0, 0, t); ctx.restore(); L('The doctor', 680);
+      drawMary(ctx, 820, 640, t, {}); L('Mary', 820);
+      drawYoungJohn(ctx, 960, 470, 0.9, {}); L('John at 25', 960);
+      drawOfficer(ctx, 1110, 640, t); L('The officer', 1110);
+      drawCat(ctx, 1220, 640, t, 'sit'); L('The cat', 1220);
+      drawJohnInBed(ctx, 60, 200, t, { blanket: [[0, '#8a5a4a'], [1, '#5a3a30']] }); text('John, in bed', 240, 290, 18, PAL.cream);
+      drawPaul(ctx, 470, 280, t, { s: 0.8 }); text('Paul', 470, 300, 18, PAL.cream);
+      drawForeman(ctx, 580, 280, t, { s: 0.8 }); text('The manager', 600, 300, 18, PAL.cream);
+      drawBurntSoldier(ctx, 720, 270, 1.6); text('The burnt soldier', 720, 300, 18, PAL.cream);
+      drawStrongbox(ctx, 880, 220, 0.8); text("Mary's strongbox", 880, 300, 18, PAL.cream);
+      drawBouquet(ctx, 1040, 230, 0.9); text('Her tulips', 1040, 300, 18, PAL.cream);
+      drawCarton(ctx, 1180, 270, 0.8); text('The box', 1170, 300, 18, PAL.cream);
+      drawVignette(ctx, W, H, 0.5);
+    },
+  },
+  title: {
+    update() {
+      const tapped = inputs.some(e => e.type === 'tap'); inputs.length = 0;
+      if (pressed('Enter') || pressed('Space') || tapped) { reset(); scene = 'play'; }
+    },
+    draw() {
+      ctx.drawImage(roomBg('factory', 1), 0, 0, W, H); clear('rgba(8,5,3,0.74)');
+      drawSmoke(ctx, 1000, 420, clock.now(), 18, 1.2);
+      text(TITLE, W / 2, 150, 76, PAL.paleOchre);
+      text('Chapter One: The List', W / 2, 222, 28, '#a89878');
+      CONTROLS.forEach((c, i) => text(c, W / 2, 330 + i * 40, 21, '#cdbb94'));
+      text('Click, tap or press Enter to begin', W / 2, 600, 26, PAL.cream);
+      text('Best with sound', W / 2, 648, 18, '#8a7a5a');
+      drawGrain(ctx, W, H, tune.grain); drawVignette(ctx, W, H, tune.vignette);
+    },
+  },
+  play: {
+    update(dt) {
+      if (pressed('KeyP')) { scene = 'pause'; inputs.length = 0; return; }
+      const st = state, send = (type, o = {}) => storyInput(st, { type, ...o });
+      if (pressed('Escape') || pressed('Backspace')) send('back');
+      if (pressed('ArrowLeft') || pressed('KeyA')) send('turn', { dir: 'left' });
+      if (pressed('ArrowRight') || pressed('KeyD')) send('turn', { dir: 'right' });
+      if (pressed('ArrowUp') || pressed('KeyW')) send('turn', { dir: 'up' });
+      if (pressed('ArrowDown') || pressed('KeyS')) send('turn', { dir: 'down' });
+      if (pressed('KeyM')) send('map');
+      if (pressed('KeyH')) send('hint');
+      if (pressed('Space')) send('space');
+      if (pressed('Enter')) send('skip');
+      inputs.splice(0).forEach(e => storyInput(st, e));
+      storyUpdate(st, dt);
+      st.score = st.inv.length;
+      if (st.done) { st.gained = 'Chapter One: The List'; scene = 'results'; setAmbience('none'); }
+    },
+    draw() { clear('#000'); storyDraw(ctx, state, mouse); },
+  },
+  pause: {
+    update() { inputs.length = 0; if (pressed('KeyP') || pressed('Escape')) scene = 'play'; },
+    draw() { scenes.play.draw(); clear('rgba(0,0,0,0.6)'); text('Paused', W / 2, H / 2 - 20, 54, PAL.paleOchre); text('P to go on', W / 2, H / 2 + 40, 24, '#cdbb94'); },
+  },
+  results: {
+    update(dt) {
+      state.t += dt;
+      const tapped = inputs.some(e => e.type === 'tap'); inputs.length = 0;
+      if (pressed('Enter') || tapped) { reset(); scene = 'play'; }
+    },
+    draw() {
+      clear('#0c0806'); drawGrain(ctx, W, H, tune.grain);
+      text(state.gained || 'The End', W / 2, 150, 44, PAL.paleOchre);
+      drawPlate(ctx, W / 2, H / 2, 980, 190);
+      text('Thank you for playing our demo.', W / 2, H / 2 - 52, 30, PAL.cream);
+      text('If John\'s story stays with you, please add the game to your Steam wishlist,', W / 2, H / 2 + 2, 22, '#e6d6ad');
+      text('and follow us on YouTube, X and Discord for the latest news.', W / 2, H / 2 + 38, 22, '#e6d6ad');
+      text('Click, tap or press Enter to play again', W / 2, 620, 22, '#a89878');
+      drawVignette(ctx, W, H, tune.vignette);
+    },
+  },
+};
+
+// ---- Loop: fixed step, frame time clamped ---------------------------------------------
+function step() {
+  if (pressed('KeyN')) { setMuted(!muted); hit.delete('KeyN'); }
+  scenes[scene].update(STEP); hit.clear();
+}
+let last, acc = 0, ALPHA = 1; // ALPHA: how far the frame is between the last two steps
+function tick() {
+  const now = clock.now();
+  acc += Math.min(now - last, 0.25); last = now; // a stall never fast-forwards the game
+  while (acc >= STEP) { step(); acc -= STEP; }
+  ALPHA = acc / STEP; // draw between steps, so the view never judders
+  drawFrame();
+}
+function drawFrame() { scenes[scene].draw(); }
+function frame() { tick(); requestAnimationFrame(frame); }
+// A headless browser on a time budget runs timers but almost no animation frames: a timer
+// ticks when no frame has come for 100 ms on a visible page; a hidden tab stays paused.
+function timer() { if (document.visibilityState === 'visible' && clock.now() - last > 0.1) tick(); }
+
+// ---- What a check can read and drive (?manual=1 stops the loop; players never see it) ----
+window.game = {
+  get scene() { return scene; },
+  get state() { return state; },
+  press(code) { hit.add(code); },
+  hold(code, on) { on ? down.add(code) : down.delete(code); },
+  get events() { return events; }, // the loop steps; a check empties it
+  step(n = 1, draw = true, alpha = 1) {
+    for (let i = 0; i < n; i++) step();
+    if (draw) { ALPHA = alpha; drawFrame(); }
+  },
+};
+
+reset();
+scene = params.get('scene') || 'title';
+last = clock.now();
+if (params.get('manual') === '1') drawFrame();
+else { requestAnimationFrame(frame); setInterval(timer, 50); }
+</script>
+</body>
+</html>
